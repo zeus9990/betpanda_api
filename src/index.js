@@ -5,10 +5,10 @@
 // the request URL's pathname, instead of the functions/ folder convention
 // used by Cloudflare Pages.
 
-
 const DATE_FIELD = "date";
 const VALID_PLATFORMS = ["discord", "telegram"];
 const MAX_LIMIT = 500;
+const MAX_DAYS = 500; // mirrors MAX_LIMIT so "days" can't request more than the query limit covers
 
 // Cache the client across requests handled by the same warm isolate.
 let cachedClient = null;
@@ -27,6 +27,19 @@ async function getClient(env) {
 
 function isValidDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !isNaN(Date.parse(value));
+}
+
+function toDateString(date) {
+  return date.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+// Given "days=N", compute [start_date, end_date] as the last N days
+// including today (UTC), inclusive on both ends.
+function computeRangeFromDays(days) {
+  const end = new Date();
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return { startDate: toDateString(start), endDate: toDateString(end) };
 }
 
 // Reduce an array of raw daily documents into a single aggregated stats object.
@@ -79,22 +92,37 @@ async function handleStats(request, env) {
   try {
     const url = new URL(request.url);
     const platform = url.searchParams.get("platform");
-    const startDate = url.searchParams.get("start_date");
-    const endDate = url.searchParams.get("end_date");
+    const daysParam = url.searchParams.get("days");
+    let startDate = url.searchParams.get("start_date");
+    let endDate = url.searchParams.get("end_date");
     const limitParam = url.searchParams.get("limit");
 
     const errors = [];
     if (!platform || !VALID_PLATFORMS.includes(platform.toLowerCase())) {
       errors.push(`platform is required and must be one of: ${VALID_PLATFORMS.join(", ")}`);
     }
-    if (!startDate || !isValidDateString(startDate)) {
-      errors.push("start_date is required and must be in YYYY-MM-DD format");
-    }
-    if (!endDate || !isValidDateString(endDate)) {
-      errors.push("end_date is required and must be in YYYY-MM-DD format");
-    }
-    if (startDate && endDate && isValidDateString(startDate) && isValidDateString(endDate) && startDate > endDate) {
-      errors.push("start_date must be before or equal to end_date");
+
+    // "days" is a shortcut: if present, it takes priority and computes
+    // start_date/end_date automatically, overriding any explicit values.
+    if (daysParam !== null) {
+      const days = parseInt(daysParam, 10);
+      if (!Number.isInteger(days) || days < 1 || days > MAX_DAYS) {
+        errors.push(`days must be a whole number between 1 and ${MAX_DAYS}`);
+      } else {
+        const range = computeRangeFromDays(days);
+        startDate = range.startDate;
+        endDate = range.endDate;
+      }
+    } else {
+      if (!startDate || !isValidDateString(startDate)) {
+        errors.push("start_date is required and must be in YYYY-MM-DD format (or use 'days' instead)");
+      }
+      if (!endDate || !isValidDateString(endDate)) {
+        errors.push("end_date is required and must be in YYYY-MM-DD format (or use 'days' instead)");
+      }
+      if (startDate && endDate && isValidDateString(startDate) && isValidDateString(endDate) && startDate > endDate) {
+        errors.push("start_date must be before or equal to end_date");
+      }
     }
 
     if (errors.length > 0) {
