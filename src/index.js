@@ -3,9 +3,7 @@
 //
 // This single file IS the whole Worker. Routing is done manually by checking
 // the request URL's pathname, instead of the functions/ folder convention
-// used by Cloudflare Pages..
-
-import { MongoClient } from "mongodb";
+// used by Cloudflare Pages.
 
 const DATE_FIELD = "date";
 const VALID_PLATFORMS = ["discord", "telegram"];
@@ -16,6 +14,10 @@ let cachedClient = null;
 
 async function getClient(env) {
   if (cachedClient) return cachedClient;
+  // Imported here (not at top of file) because bson's ObjectId does a
+  // random-byte generation during module load, which Workers only allow
+  // inside a request handler, not at global/top-level script init.
+  const { MongoClient } = await import("mongodb");
   const client = new MongoClient(env.MONGODB_URI);
   await client.connect();
   cachedClient = client;
