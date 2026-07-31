@@ -5,6 +5,7 @@
 // the request URL's pathname, instead of the functions/ folder convention
 // used by Cloudflare Pages.
 
+
 const DATE_FIELD = "date";
 const VALID_PLATFORMS = ["discord", "telegram"];
 const MAX_LIMIT = 500;
@@ -26,6 +27,52 @@ async function getClient(env) {
 
 function isValidDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !isNaN(Date.parse(value));
+}
+
+// Reduce an array of raw daily documents into a single aggregated stats object.
+function aggregateStats(documents, platform, startDate, endDate) {
+  let totalJoined = 0;
+  let totalLeft = 0;
+  let memberGrowth = 0;
+  let totalMessages = 0;
+  const activeUserIds = new Set();
+
+  // Docs are sorted by date desc (most recent first), so the first doc
+  // encountered gives us the latest total_members for the range.
+  let latestTotalMembers = null;
+
+  for (const doc of documents) {
+    totalJoined += doc.total_joined || 0;
+    totalLeft += doc.total_left || 0;
+    memberGrowth += doc.growth || 0;
+    totalMessages += doc.total_messages || 0;
+
+    if (Array.isArray(doc.active_user_ids)) {
+      for (const id of doc.active_user_ids) activeUserIds.add(id);
+    }
+
+    if (latestTotalMembers === null && typeof doc.total_members === "number") {
+      latestTotalMembers = doc.total_members;
+    }
+  }
+
+  const dayCount = documents.length;
+  const averageDailyMessages = dayCount > 0
+    ? Number((totalMessages / dayCount).toFixed(2))
+    : 0;
+
+  return {
+    platform,
+    start_date: startDate,
+    end_date: endDate,
+    total_joined: totalJoined,
+    total_left: totalLeft,
+    member_growth: memberGrowth,
+    total_messages: totalMessages,
+    average_daily_messages: averageDailyMessages,
+    active_members: activeUserIds.size,
+    total_members: latestTotalMembers,
+  };
 }
 
 async function handleStats(request, env) {
@@ -57,7 +104,7 @@ async function handleStats(request, env) {
       });
     }
 
-    const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 100, MAX_LIMIT) : 100;
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10) || MAX_LIMIT, MAX_LIMIT) : MAX_LIMIT;
 
     const filter = {
       platform: platform.toLowerCase(),
@@ -74,7 +121,9 @@ async function handleStats(request, env) {
       .limit(limit)
       .toArray();
 
-    return new Response(JSON.stringify(documents), {
+    const stats = aggregateStats(documents, platform.toLowerCase(), startDate, endDate);
+
+    return new Response(JSON.stringify(stats), {
       status: 200,
       headers: {
         "Content-Type": "application/json",
