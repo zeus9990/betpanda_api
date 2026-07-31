@@ -1,0 +1,4 @@
+name = "betpanda-api"
+main = "src/index.js"
+compatibility_date = "2026-07-29"
+compatibility_flags = ["nodejs_compat"]
