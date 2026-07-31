@@ -3,7 +3,7 @@
 //
 // This single file IS the whole Worker. Routing is done manually by checking
 // the request URL's pathname, instead of the functions/ folder convention
-// used by Cloudflare Pages.
+// used by Cloudflare Pages..
 
 import { MongoClient } from "mongodb";
 
