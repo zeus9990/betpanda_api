@@ -1,4 +1,7 @@
 name = "betpanda-api"
 main = "src/index.js"
-compatibility_date = "2026-07-29"
+compatibility_date = "2026-01-15"
 compatibility_flags = ["nodejs_compat"]
+[vars]
+MONGODB_DATABASE = "Betpanda"
+MONGODB_COLLECTION = "platform_stats"
