@@ -4,11 +4,17 @@
 // This single file IS the whole Worker. Routing is done manually by checking
 // the request URL's pathname, instead of the functions/ folder convention
 // used by Cloudflare Pages.
+//
+// Usage:
+//   GET /api/stats?platform=discord&start_date=2026-01-01&end_date=2026-01-31
+//
+//   platform     required, must be "discord" or "telegram"
+//   start_date   required, format YYYY-MM-DD
+//   end_date     required, format YYYY-MM-DD (inclusive)
 
 const DATE_FIELD = "date";
 const VALID_PLATFORMS = ["discord", "telegram"];
 const MAX_LIMIT = 500;
-const MAX_DAYS = 500; // mirrors MAX_LIMIT so "days" can't request more than the query limit covers
 
 // Cache the client across requests handled by the same warm isolate.
 let cachedClient = null;
@@ -29,100 +35,34 @@ function isValidDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !isNaN(Date.parse(value));
 }
 
-function toDateString(date) {
-  return date.toISOString().slice(0, 10); // YYYY-MM-DD
-}
-
-// Given "days=N", compute [start_date, end_date] as the last N days
-// including today (UTC), inclusive on both ends.
-function computeRangeFromDays(days) {
-  const end = new Date();
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - (days - 1));
-  return { startDate: toDateString(start), endDate: toDateString(end) };
-}
-
-// Reduce an array of raw daily documents into a single aggregated stats object.
-function aggregateStats(documents, platform, startDate, endDate) {
-  let totalJoined = 0;
-  let totalLeft = 0;
-  let memberGrowth = 0;
-  let totalMessages = 0;
-  const activeUserIds = new Set();
-
-  // Docs are sorted by date desc (most recent first), so the first doc
-  // encountered gives us the latest total_members for the range.
-  let latestTotalMembers = null;
-
-  for (const doc of documents) {
-    totalJoined += doc.total_joined || 0;
-    totalLeft += doc.total_left || 0;
-    memberGrowth += doc.growth || 0;
-    totalMessages += doc.total_messages || 0;
-
-    if (Array.isArray(doc.active_user_ids)) {
-      for (const id of doc.active_user_ids) activeUserIds.add(id);
-    }
-
-    if (latestTotalMembers === null && typeof doc.total_members === "number") {
-      latestTotalMembers = doc.total_members;
-    }
-  }
-
-  const dayCount = documents.length;
-  const averageDailyMessages = dayCount > 0
-    ? Number((totalMessages / dayCount).toFixed(2))
-    : 0;
-
-  return {
-    platform,
-    start_date: startDate,
-    end_date: endDate,
-    total_joined: totalJoined,
-    total_left: totalLeft,
-    member_growth: memberGrowth,
-    total_messages: totalMessages,
-    average_daily_messages: averageDailyMessages,
-    active_members: activeUserIds.size,
-    total_members: latestTotalMembers,
-  };
-}
-
 async function handleStats(request, env) {
   try {
+    const providedKey = request.headers.get("x-api-key");
+    if (!providedKey || providedKey !== env.API_KEY) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const url = new URL(request.url);
     const platform = url.searchParams.get("platform");
-    const daysParam = url.searchParams.get("days");
-    let startDate = url.searchParams.get("start_date");
-    let endDate = url.searchParams.get("end_date");
+    const startDate = url.searchParams.get("start_date");
+    const endDate = url.searchParams.get("end_date");
     const limitParam = url.searchParams.get("limit");
 
     const errors = [];
     if (!platform || !VALID_PLATFORMS.includes(platform.toLowerCase())) {
       errors.push(`platform is required and must be one of: ${VALID_PLATFORMS.join(", ")}`);
     }
-
-    // "days" is a shortcut: if present, it takes priority and computes
-    // start_date/end_date automatically, overriding any explicit values.
-    if (daysParam !== null) {
-      const days = parseInt(daysParam, 10);
-      if (!Number.isInteger(days) || days < 1 || days > MAX_DAYS) {
-        errors.push(`days must be a whole number between 1 and ${MAX_DAYS}`);
-      } else {
-        const range = computeRangeFromDays(days);
-        startDate = range.startDate;
-        endDate = range.endDate;
-      }
-    } else {
-      if (!startDate || !isValidDateString(startDate)) {
-        errors.push("start_date is required and must be in YYYY-MM-DD format (or use 'days' instead)");
-      }
-      if (!endDate || !isValidDateString(endDate)) {
-        errors.push("end_date is required and must be in YYYY-MM-DD format (or use 'days' instead)");
-      }
-      if (startDate && endDate && isValidDateString(startDate) && isValidDateString(endDate) && startDate > endDate) {
-        errors.push("start_date must be before or equal to end_date");
-      }
+    if (!startDate || !isValidDateString(startDate)) {
+      errors.push("start_date is required and must be in YYYY-MM-DD format");
+    }
+    if (!endDate || !isValidDateString(endDate)) {
+      errors.push("end_date is required and must be in YYYY-MM-DD format");
+    }
+    if (startDate && endDate && isValidDateString(startDate) && isValidDateString(endDate) && startDate > endDate) {
+      errors.push("start_date must be before or equal to end_date");
     }
 
     if (errors.length > 0) {
@@ -132,7 +72,7 @@ async function handleStats(request, env) {
       });
     }
 
-    const limit = limitParam ? Math.min(parseInt(limitParam, 10) || MAX_LIMIT, MAX_LIMIT) : MAX_LIMIT;
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 100, MAX_LIMIT) : 100;
 
     const filter = {
       platform: platform.toLowerCase(),
@@ -149,14 +89,9 @@ async function handleStats(request, env) {
       .limit(limit)
       .toArray();
 
-    const stats = aggregateStats(documents, platform.toLowerCase(), startDate, endDate);
-
-    return new Response(JSON.stringify(stats), {
+    return new Response(JSON.stringify(documents), {
       status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
+      headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
