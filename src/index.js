@@ -7,7 +7,7 @@
 
 
 const DATE_FIELD = "date";
-const VALID_PLATFORMS = ["discord", "telegram"];
+const VALID_PLATFORMS = ["discord", "telegram_group", "telegram_channel"];
 const MAX_LIMIT = 500;
 const MAX_DAYS = 500; // mirrors MAX_LIMIT so "days" can't request more than the query limit covers
 
